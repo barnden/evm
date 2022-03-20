@@ -75,6 +75,6 @@ def riesz_pyramid(im, n=3):
 
     for i in range(n - 1):
         levels_x.append(convolve(lpyramid[i], kernel_x))
-        levels_x.append(convolve(lpyramid[i], kernel_y))
+        levels_y.append(convolve(lpyramid[i], kernel_y))
 
     return (lpyramid, levels_x, levels_y)
