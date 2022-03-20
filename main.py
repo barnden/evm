@@ -1,60 +1,11 @@
 #!/bin/python3
 
 import numpy as np
-import scipy.sparse as sp
-import scipy.sparse.linalg
-from skimage.transform import rescale
-from scipy.ndimage import gaussian_filter
-from matplotlib import pyplot as plt
-from numpy.fft import fft2, ifft2
 from scipy.signal import butter
 from skimage.color import rgb2yiq, yiq2rgb
 import cv2
 
-
-def gaussian_pyramid(im, n=3):
-    w, h, _c = im.shape
-
-    p2 = 2 ** (n - 1)
-
-    # Pad to nearest multiple of 2^(n-1)
-    if w % p2 != 0 or h % p2 != 0:
-        im = np.pad(
-            im,
-            [(0, p2 - (w % p2)), (0, p2 - (h % p2)), (0, 0)],
-            mode='constant')
-
-    levels = [im]
-
-    # We already have G1, so iterate to n - 1
-    for i in range(n - 1):
-        # Get current level
-        Gi = cv2.pyrDown(levels[i])
-        # Add to pyramid
-        levels.append(Gi)
-
-    return levels
-
-
-def laplacian_pyramid(im, n=3):
-    gpyramid = gaussian_pyramid(im, n)
-    levels = []
-
-    for i in range(n - 1):
-        # Get current level
-        Gi = gpyramid[i]
-        w, h, _c = Gi.shape
-        # Filter and upsample to same dimension as Gi
-        Gn = cv2.pyrUp(gpyramid[i + 1])
-        # Get Laplacian level i
-        Li = Gi - Gn
-        levels.append(Li)
-
-    # Last Laplacian and Gaussian are the same
-    levels.append(gpyramid[-1])
-
-    return levels
-
+from pyramids import laplacian_pyramid
 
 def ideal_bandpass_filter(im, fps):
     freq = list(range(n))
@@ -63,7 +14,7 @@ def ideal_bandpass_filter(im, fps):
 
 if __name__ == '__main__':
     # Video input
-    input_video_file = "./Videos/face.mp4"
+    input_video_file = "./Videos/baby.mp4"
     cap = cv2.VideoCapture(input_video_file)
 
     pos_frame = cap.get(cv2.CAP_PROP_POS_FRAMES)
