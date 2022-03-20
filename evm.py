@@ -1,15 +1,15 @@
 #!/bin/python3
 
+'''
+Eulerian Video Magnfication using Laplacian Pyramids
+'''
+
 import numpy as np
 from scipy.signal import butter
 from skimage.color import rgb2yiq, yiq2rgb
 import cv2
 
 from pyramids import laplacian_pyramid
-
-def ideal_bandpass_filter(im, fps):
-    freq = list(range(n))
-    pass
 
 
 if __name__ == '__main__':
