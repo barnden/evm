@@ -48,3 +48,33 @@ def laplacian_pyramid(im, n=3):
     levels.append(gpyramid[-1])
 
     return levels
+
+
+def riesz_pyramid(im, n=3):
+    # Implementation of Riesz pyramids
+    # From the paper "Riesz Pyramids for Fast Phase-Based Video Magnification" by Wadhwa et al.
+
+    lpyramid = laplacian_pyramid(im, n)
+    levels_x = []
+    levels_y = []
+
+    # Riesz transformation approximation (see section 3.1 from Wadhwa et al.)
+    kernel_x = np.array([
+        [0, 0, 0],
+        [.5, 0, -.5],
+        [0, 0, 0]
+    ])
+
+    kernel_y = np.array([
+        [0, .5, 0],
+        [0, 0, 0],
+        [0, -.5, 0]
+    ])
+
+    convolve = lambda layer, kernel : np.stack([convolve2d(layer[:, :, j], kernel, mode='same') for j in range(3)], axis=-1)
+
+    for i in range(n - 1):
+        levels_x.append(convolve(lpyramid[i], kernel_x))
+        levels_x.append(convolve(lpyramid[i], kernel_y))
+
+    return (lpyramid, levels_x, levels_y)
