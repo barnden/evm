@@ -7,14 +7,12 @@ Phase-Based Video Magnification using Riesz Pyramids
 import numpy as np
 from scipy.signal import butter
 from scipy.ndimage import gaussian_filter
-from skimage.color import rgb2yiq, yiq2rgb
 import cv2
-from math import sqrt, acos
 
 from pyramids import riesz_pyramid
 
 fudge = .1
-max_frames = 100
+max_frames = -1
 
 def phase_diff_ampl(curr, prev):
     curr_real, curr_x, curr_y = curr
@@ -70,9 +68,6 @@ if __name__ == '__main__':
 
     pos_frame = cap.get(cv2.CAP_PROP_POS_FRAMES)
 
-    # List of Riesz pyramids
-    rpyramids = []
-
     # Framerate of input video
     fps = cap.get(cv2.CAP_PROP_FPS)
 
@@ -80,26 +75,107 @@ if __name__ == '__main__':
     depth = 4
 
     # Parameters for Temporal filtering
-    freq_low = .85
-    freq_high = 1.5
+    freq_low = .4
+    freq_high = 3
 
     # Stdev for Gaussian kernel
     sigma = 2
 
     # Amplification factor
-    ampl_factor = 2
+    ampl_factor = 20
 
     # Create lowpass Butterworth filters
     A, B = butter(1, (freq_low / fps / 2, freq_high / fps / 2), 'bandpass')
 
-    # Generate a Riesz pyramid for each frame
+    # Perform Phase-based Video Magnification
+    prev = None
+
+    # Dimensions of padded L1
+    h = None
+    w = None
+
+    # Video output
+    out = None
+
+    # Quaternionic phase information
+    phase_cos = None
+    phase_sin = None
+
+    # IIR temporal filter values
+    register0_cos = None
+    register1_cos = None
+
+    register0_sin = None
+    register1_sin = None
+
     while True:
         flag, frame = cap.read()
 
         if flag:
-            frame = rgb2yiq(frame)
-            rpyramids.append(riesz_pyramid(frame, depth))
+            frame = frame.astype(float) / 255
+            curr = riesz_pyramid(frame, depth)
             pos_frame = cap.get(cv2.CAP_PROP_POS_FRAMES)
+
+            if pos_frame == 1:
+                prev = curr
+                h, w, _c = prev[0][0].shape
+
+                out = cv2.VideoWriter("out.avi", cv2.VideoWriter_fourcc(*'FMP4'), fps, (w, h), True)
+
+                phase_cos = [np.zeros(curr[0][j].shape) for j in range(depth - 1)]
+                phase_sin = phase_cos.copy()
+
+                register0_cos = phase_cos.copy()
+                register1_cos = phase_cos.copy()
+
+                register0_sin = phase_cos.copy()
+                register1_sin = phase_cos.copy()
+
+                continue
+
+            magnified_lpyramid = [[]] * depth
+
+            for j in range(depth - 1):
+                # Compute quaternionic phase diff between current and prev Riesz pyramids
+                phase_diff_cos, phase_diff_sin, ampl = phase_diff_ampl(
+                    [curr[0][j], curr[1][j], curr[2][j]],
+                    [prev[0][j], prev[1][j], prev[2][j]]
+                )
+
+                # Add quaternionic phase diff to current quaternionic phase
+                phase_cos[j] += phase_diff_cos
+                phase_sin[j] += phase_diff_sin
+
+                # Filter the quaternionic phase temporally
+                phase_filtered_cos, register0_cos[j], register1_cos[j] = iir_temporal_filter(B, A, phase_cos[j], register0_cos[j], register1_cos[j])
+                phase_filtered_sin, register0_sin[j], register1_sin[j] = iir_temporal_filter(B, A, phase_sin[j], register0_sin[j], register1_sin[j])
+
+                # Denoising and smoothing of errors by spatially blurring the temporally filtered quaternionic phase signals
+                phase_filtered_cos = amplitude_weighted_blur(phase_filtered_cos, ampl, sigma)
+                phase_filtered_sin = amplitude_weighted_blur(phase_filtered_sin, ampl, sigma)
+
+                # Compute motion magnified pyramid
+                # Phase shift input pyramid by spatiotemporally filtered quaternionic phase
+                phase_mag_filtered_cos = ampl_factor * phase_filtered_cos
+                phase_mag_filtered_sin = ampl_factor * phase_filtered_sin
+
+                magnified_lpyramid[j] = phase_shift_coeff_real(curr[0][j], curr[1][j], curr[2][j], phase_mag_filtered_cos, phase_mag_filtered_sin)
+
+            # Use residual lowpass from current frame
+            magnified_lpyramid[-1] = curr[0][-1]
+
+            # Pyramid collapse
+            for j in range(depth - 1, 0, -1):
+                magnified_lpyramid[j - 1] += cv2.pyrUp(magnified_lpyramid[j])
+
+            result = 255 * np.clip(magnified_lpyramid[0], 0, 1)
+            result = result.astype(np.uint8)
+
+            cv2.imshow('hi', result)
+            out.write(result)
+
+            if cv2.waitKey(10) == 27:
+                break
 
             if max_frames > 0 and pos_frame >= max_frames:
                 break
@@ -108,68 +184,6 @@ if __name__ == '__main__':
             break
 
     cap.release()
-
-    # Dimensions of padded L1
-    h, w, _c = rpyramids[0][0][0].shape
-
-    # Video output
-    out = cv2.VideoWriter("out.avi", cv2.VideoWriter_fourcc(*'FMP4'), fps, (w, h), True)
-
-    # Initialize values for quaternionic phase information
-    phase_cos = [np.zeros(rpyramids[0][0][j].shape) for j in range(depth - 1)]
-    phase_sin = phase_cos.copy()
-
-    # IIR temporal filter values
-    register0_cos = phase_cos.copy()
-    register1_cos = phase_cos.copy()
-
-    register0_sin = phase_cos.copy()
-    register1_sin = phase_cos.copy()
-
-    for i in range(1, int(pos_frame)):
-        # Current/previous Riesz pyramid
-        curr = rpyramids[i]
-        prev = rpyramids[i - 1]
-
-        magnified_lpyramid = [[]] * depth
-
-        for j in range(depth - 1):
-            # Compute quaternionic phase diff between current and prev Riesz pyramids
-            phase_diff_cos, phase_diff_sin, ampl = phase_diff_ampl(
-                [curr[0][j], curr[1][j], curr[2][j]],
-                [prev[0][j], prev[1][j], prev[2][j]]
-            )
-
-            # Add quaternionic phase diff to current quaternionic phase
-            phase_cos[j] += phase_diff_cos
-            phase_sin[j] += phase_diff_sin
-
-            # Filter the quaternionic phase temporally
-            phase_filtered_cos, register0_cos[j], register1_cos[j] = iir_temporal_filter(B, A, phase_cos[j], register0_cos[j], register1_cos[j])
-            phase_filtered_sin, register0_sin[j], register1_sin[j] = iir_temporal_filter(B, A, phase_sin[j], register0_sin[j], register1_sin[j])
-
-            # Denoising and smoothing of errors by spatially blurring the temporally filtered quaternionic phase signals
-            phase_filtered_cos = amplitude_weighted_blur(phase_filtered_cos, ampl, sigma)
-            phase_filtered_sin = amplitude_weighted_blur(phase_filtered_sin, ampl, sigma)
-
-            # Compute motion magnified pyramid
-            # Phase shift input pyramid by spatiotemporally filtered quaternionic phase
-            phase_mag_filtered_cos = ampl_factor * phase_filtered_cos
-            phase_mag_filtered_sin = ampl_factor * phase_filtered_sin
-
-            magnified_lpyramid[j] = phase_shift_coeff_real(curr[0][j], curr[1][j], curr[2][j], phase_mag_filtered_cos, phase_mag_filtered_sin)
-
-        # Use residual lowpass from current frame
-        magnified_lpyramid[-1] = curr[0][-1]
-
-        # Pyramid collapse
-        for j in range(depth - 1, 0, -1):
-            magnified_lpyramid[j - 1] += cv2.pyrUp(magnified_lpyramid[j])
-
-        result = 255 * np.clip(yiq2rgb(magnified_lpyramid[0]), 0, 1)
-        result = result.astype(np.uint8)
-
-        out.write(result)
 
     out.release()
     cv2.destroyAllWindows()
