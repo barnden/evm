@@ -11,6 +11,7 @@ import cv2
 
 from pyramids import riesz_pyramid
 
+# FIXME: phase_diff_ampl and phase_shift_coeff_real encounter div by zero which shouldn't be happening.
 fudge = .1
 max_frames = -1
 
@@ -18,19 +19,19 @@ def phase_diff_ampl(curr, prev):
     curr_real, curr_x, curr_y = curr
     prev_real, prev_x, prev_y = prev
 
-    q_conj_prod_real = np.multiply(curr_real, prev_real) + np.multiply(curr_x, prev_x) + np.multiply(curr_y, prev_y)
-    q_conj_prod_x = np.multiply(prev_real, curr_x) - np.multiply(curr_real, prev_x)
-    q_conj_prod_y = np.multiply(prev_real, curr_y) - np.multiply(curr_real, prev_y)
+    q_conj_prod_real = curr_real * prev_real + curr_x * prev_x + curr_y * prev_y
+    q_conj_prod_x = prev_real * curr_x - curr_real * prev_x
+    q_conj_prod_y = prev_real * curr_y - curr_real * prev_y
 
-    q_conj_prod_ampl = np.sqrt(fudge + np.power(q_conj_prod_real, 2) + np.power(q_conj_prod_x, 2) + np.power(q_conj_prod_y, 2))
-    phase_diff = np.arccos(np.divide(q_conj_prod_real, q_conj_prod_ampl))
+    q_conj_prod_ampl = np.sqrt(fudge + q_conj_prod_real ** 2 + q_conj_prod_x ** 2 + q_conj_prod_y ** 2)
+    phase_diff = np.arccos(q_conj_prod_real / q_conj_prod_ampl)
 
-    denominator = fudge + np.power(q_conj_prod_x, 2) + np.power(q_conj_prod_y, 2)
-    cos_orientation = np.divide(q_conj_prod_x, denominator)
-    sin_orientation = np.divide(q_conj_prod_y, denominator)
+    denominator = np.sqrt(fudge + q_conj_prod_x ** 2 + q_conj_prod_y ** 2)
+    cos_orientation = q_conj_prod_x / denominator
+    sin_orientation = q_conj_prod_y / denominator
 
-    phase_diff_cos = np.multiply(phase_diff, cos_orientation)
-    phase_diff_sin = np.multiply(phase_diff, sin_orientation)
+    phase_diff_cos = phase_diff * cos_orientation
+    phase_diff_sin = phase_diff * sin_orientation
 
     amplitude = np.sqrt(q_conj_prod_ampl)
 
@@ -39,27 +40,26 @@ def phase_diff_ampl(curr, prev):
 def iir_temporal_filter(B, A, phase, register0, register1):
     temporally_filtered_phase = B[0] * phase + register0
     register0 = B[1] * phase + register1 - A[1] * temporally_filtered_phase
-    reigster1 = B[2] * phase             - A[2] * temporally_filtered_phase
+    register1 = B[2] * phase - A[2] * temporally_filtered_phase
 
     return (temporally_filtered_phase, register0, register1)
 
 def amplitude_weighted_blur(temporally_filtered_phase, amplitude, sigma):
     denominator = gaussian_filter(amplitude, sigma)
-    numerator = gaussian_filter(np.multiply(temporally_filtered_phase, amplitude), sigma)
+    numerator = gaussian_filter(temporally_filtered_phase * amplitude, sigma)
 
     # Spatially smooth temporally filtered phase
-    return np.divide(numerator, denominator)
+    return numerator / denominator
 
 def phase_shift_coeff_real(riesz_real, riesz_x, riesz_y, phase_cos, phase_sin):
-    phase_mag = np.sqrt(np.power(phase_cos, 2) + np.power(phase_sin, 2))
+    phase_mag = np.sqrt(phase_cos ** 2 + phase_sin ** 2) + fudge
     exp_phase_real = np.cos(phase_mag)
 
-    denominator = fudge + np.multiply(phase_mag, np.sin(phase_mag))
-    exp_phase_x = np.divide(phase_cos, denominator)
-    exp_phase_y = np.divide(phase_sin, denominator)
+    exp_phase_x = phase_cos / phase_mag * np.sin(phase_mag)
+    exp_phase_y = phase_sin / phase_mag * np.sin(phase_mag)
 
     # Real part of quarternion mult
-    return np.multiply(exp_phase_real, riesz_real) - np.multiply(exp_phase_x, riesz_x) - np.multiply(exp_phase_y, riesz_y)
+    return exp_phase_real * riesz_real - exp_phase_x * riesz_x - exp_phase_y * riesz_y
 
 if __name__ == '__main__':
     # Video input
@@ -85,7 +85,7 @@ if __name__ == '__main__':
     ampl_factor = 20
 
     # Create lowpass Butterworth filters
-    A, B = butter(1, (freq_low / fps / 2, freq_high / fps / 2), 'bandpass')
+    B, A = butter(1, (freq_low / fps / 2, freq_high / fps / 2), 'bandpass')
 
     # Perform Phase-based Video Magnification
     prev = None
@@ -171,7 +171,9 @@ if __name__ == '__main__':
             result = 255 * np.clip(magnified_lpyramid[0], 0, 1)
             result = result.astype(np.uint8)
 
-            cv2.imshow('hi', result)
+            prev = curr
+
+            cv2.imshow('preview', result)
             out.write(result)
 
             if cv2.waitKey(10) == 27:
